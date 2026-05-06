@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.DS_Store
+node_modules/
+dist/
+.idea/
+.vscode/
+*.log
+*.zip
+
+temp_pbix/
+pbix_almacen_extracted/

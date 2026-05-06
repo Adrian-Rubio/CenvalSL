@@ -1,0 +1,444 @@
+import { useState, useEffect, Fragment } from 'react';
+import { fetchProductionOrders, fetchProductionOperations } from '../services/api';
+import { Link } from 'react-router-dom';
+import useDataStore from '../store/dataStore';
+import { PageHeader } from '../components/common/PageHeader';
+
+// Helper for status badges
+const StatusBadge = ({ statusId, statusDesc }) => {
+    switch (statusId) {
+        case 0:
+            return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 transition-colors">● {statusDesc}</span>;
+        case 1:
+            return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 transition-colors">● {statusDesc}</span>;
+        case 2:
+            return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300 transition-colors">● {statusDesc}</span>;
+        case 3:
+            return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-300 transition-colors">● {statusDesc}</span>;
+        default:
+            return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors">● {statusDesc || 'Desconocido'}</span>;
+    }
+};
+
+const OperationsTable = ({ exercise, workNum, fabNum, series }) => {
+    const [ops, setOps] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const loadOps = async () => {
+            setLoading(true);
+            const data = await fetchProductionOperations(exercise, workNum);
+            setOps(data);
+            setLoading(false);
+        };
+        loadOps();
+    }, [exercise, workNum]);
+
+    if (loading) return <div className="p-4 text-sm text-slate-500 dark:text-slate-400 italic flex items-center justify-center gap-2 transition-all"><div className="animate-spin rounded-full h-4 w-4 border-2 border-slate-300 dark:border-slate-600 border-t-indigo-500" /> Cargando operaciones de la orden {workNum}...</div>;
+    if (!ops || ops.length === 0 || ops.error) return <div className="p-6 text-sm text-slate-400 dark:text-slate-500 italic text-center bg-slate-50 dark:bg-slate-800/50 transition-colors">No se han registrado operaciones de taller para la orden de trabajo {workNum} (O.F. {series}/{fabNum}).</div>;
+
+    return (
+        <div className="p-4 bg-indigo-50/40 dark:bg-indigo-900/10 border-y border-indigo-100 dark:border-indigo-800/30 shadow-inner overflow-hidden transition-all duration-300 animate-in fade-in slide-in-from-top-2">
+            <h4 className="text-xs font-bold text-indigo-800 dark:text-indigo-300 uppercase mb-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                    Ficha Técnica: Ruta de Operaciones
+                </div>
+                <div className="flex gap-4 font-mono text-[10px] bg-indigo-100/50 dark:bg-indigo-900/30 px-2 py-1 rounded border border-indigo-200 dark:border-indigo-800/50 transition-colors">
+                    <span>Nº TRABAJO: <span className="font-black text-slate-800 dark:text-slate-200">{workNum}</span></span>
+                    <span>Nº FABRICACIÓN (O.F.): <span className="font-black text-indigo-700 dark:text-indigo-400">{series}/{fabNum}</span></span>
+                </div>
+            </h4>
+            <div className="overflow-hidden rounded border border-indigo-100 dark:border-indigo-800/50 bg-white dark:bg-slate-900 transition-colors">
+                <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800">
+                    <thead className="bg-indigo-50/50 dark:bg-indigo-900/20 transition-colors">
+                        <tr className="text-left text-slate-500 dark:text-slate-400 font-medium">
+                            <th className="px-3 py-2">Orden</th>
+                            <th className="px-3 py-2">Operación</th>
+                            <th className="px-3 py-2">Artículo</th>
+                            <th className="px-3 py-2">Descripción Tarea</th>
+                            <th className="px-3 py-2">Operario/s</th>
+                            <th className="px-3 py-2 text-center">Tipo</th>
+                            <th className="px-3 py-2 text-right">T. Unitario</th>
+                            <th className="px-3 py-2 text-right">T. Total</th>
+                            <th className="px-3 py-2 text-right">Estado</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800/50">
+                        {ops.map((op, idx) => (
+                            <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                                <td className="px-3 py-2 text-slate-600 dark:text-slate-400 font-mono font-bold">{op.Orden}</td>
+                                <td className="px-3 py-2 text-indigo-600 dark:text-indigo-400 font-bold border-x border-indigo-50 dark:border-slate-800">{op.Operacion}</td>
+                                <td className="px-3 py-2 text-indigo-700 dark:text-indigo-300 font-medium">{op.CodigoArticulo}</td>
+                                <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{op.DescripcionOperacion}</td>
+                                <td className="px-3 py-2 text-slate-500 dark:text-slate-400 text-xs italic">
+                                    <div className="flex flex-col gap-1 items-start">
+                                        <span className={op.IsSileaOperatives ? "font-bold text-slate-700 dark:text-slate-300 not-italic" : ""}>{op.Operarios || '-'}</span>
+                                        {op.IsSileaOperatives && (
+                                            <span className="px-1.5 py-0.5 rounded text-[8px] font-black bg-blue-100 text-blue-700 border border-blue-200 dark:bg-blue-900/40 dark:text-blue-400 dark:border-blue-800 flex items-center gap-1 w-fit">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                                                TIEMPO SILEA
+                                            </span>
+                                        )}
+                                    </div>
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                    {op.OperacionExterna === 1
+                                        ? <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-400 border border-orange-200 dark:border-orange-800/50">EXTERNA</span>
+                                        : <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">TALLER</span>}
+                                </td>
+                                <td className="px-3 py-2 text-right text-slate-600 dark:text-slate-400 font-mono">{op.TiempoUnFabricacionFormat}</td>
+                                <td className="px-3 py-2 text-right font-mono font-bold">
+                                    <div className="flex flex-col items-end">
+                                        <span className={op.IsSileaTime ? "text-blue-700 dark:text-blue-400" : "text-slate-800 dark:text-slate-200"}>{op.TiempoTotalFormat}</span>
+                                        {op.IsSileaTime && <span className="text-[8px] text-blue-500 dark:text-blue-400 font-black tracking-wider shadow-sm px-1 rounded bg-blue-50 dark:bg-blue-900/20" title="Tiempo real extraído de la máquina en planta">REAL TALLER</span>}
+                                    </div>
+                                </td>
+                                <td className="px-3 py-2 text-right">
+                                    {op.SileaEstadoRaw === 'ACTIVO' ? (
+                                        <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-blue-600 text-white flex items-center justify-end gap-2 w-fit ml-auto shadow-[0_0_12px_rgba(37,99,235,0.6)]">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                            ACTIVO
+                                        </span>
+                                    ) : op.SileaEstadoRaw === 'PAUSADO' ? (
+                                        <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 w-fit ml-auto shadow-inner">
+                                            PAUSADO
+                                        </span>
+                                    ) : (
+                                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${op.EstadoOperacion === 2 ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400' :
+                                            op.EstadoOperacion === 1 ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400' :
+                                                op.EstadoOperacion === 3 ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400' :
+                                                    'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                                            }`}>
+                                            {op.EstadoDesc}
+                                        </span>
+                                    )}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+
+const TruncatedCell = ({ text, maxWidth = "200px" }) => {
+    const [isOverflowing, setIsOverflowing] = useState(false);
+    const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+    const cellRef = import.meta.env.SSR ? null : (el) => {
+        if (!el) return;
+        const checkOverflow = () => {
+            setIsOverflowing(el.scrollWidth > el.clientWidth);
+        };
+        checkOverflow();
+        // Option window resize is also handled
+        window.addEventListener('resize', checkOverflow);
+        return () => window.removeEventListener('resize', checkOverflow);
+    };
+
+    // Ref for the actual div to check overflow
+    const textRef = useState(null)[0];
+
+    useEffect(() => {
+        const el = document.getElementById(`cell-${text}`); // Simplistic approach for demo
+        if (el) {
+            setIsOverflowing(el.scrollWidth > el.clientWidth);
+        }
+    }, [text]);
+
+    if (!text) return <td className="px-3 py-2 text-slate-400 dark:text-slate-600 italic">-</td>;
+
+    const handleMouseMove = (e) => {
+        setMousePos({ x: e.clientX, y: e.clientY });
+    };
+
+    return (
+        <td
+            className="px-3 py-2 text-slate-500 dark:text-slate-400 italic relative group/obs border-x border-slate-100 dark:border-slate-800"
+            style={{ maxWidth }}
+            onMouseMove={handleMouseMove}
+        >
+            <div
+                id={`cell-${text}`}
+                className="truncate"
+                onMouseEnter={(e) => {
+                    setIsOverflowing(e.currentTarget.scrollWidth > e.currentTarget.clientWidth);
+                }}
+            >
+                {text}
+            </div>
+            {isOverflowing && (
+                <div
+                    className="fixed invisible group-hover/obs:visible z-[9999] bg-slate-900 border-slate-700 dark:bg-slate-800 text-white text-[12px] p-4 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.5)] w-80 whitespace-normal border backdrop-blur-md transition-opacity duration-200 pointer-events-none"
+                    style={{
+                        top: `${mousePos.y - 10}px`,
+                        left: `${mousePos.x + 20}px`,
+                        transform: 'translateY(-100%)'
+                    }}
+                >
+                    <div className="font-black border-b border-white/20 dark:border-slate-600 mb-2 pb-1 text-indigo-400 uppercase text-[10px] tracking-widest flex items-center justify-between">
+                        <span>Detalle Observaciones</span>
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                    <div className="leading-relaxed text-slate-200 dark:text-slate-300">
+                        {text}
+                    </div>
+                    {/* Small arrow pointing to the mouse */}
+                    <div className="absolute -bottom-1 left-0 w-3 h-3 bg-slate-900 dark:bg-slate-800 rotate-45 border-r border-b border-slate-700 hidden"></div>
+                </div>
+            )}
+        </td>
+    );
+};
+
+export default function Produccion() {
+    const { productionData, productionFiltersHash, setProductionData } = useDataStore();
+    const [data, setData] = useState(productionData || []);
+    const [loading, setLoading] = useState(!productionData);
+    const [error, setError] = useState(null);
+
+    // Initial dates (current month)
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const today = now.toISOString().split('T')[0];
+
+    // Detailed Filters
+    const [filters, setFilters] = useState({
+        exercise: new Date().getFullYear(),
+        work_num: '',
+        series: '',
+        fabrication_num: '',
+        article: '',
+        status: '',
+        operator: '',
+        observations: ''
+    });
+
+    const [expandedRows, setExpandedRows] = useState({});
+
+    useEffect(() => {
+        loadData();
+    }, []); // Initial load
+
+    const toggleRow = (workNum) => {
+        setExpandedRows(prev => ({
+            ...prev,
+            [workNum]: !prev[workNum]
+        }));
+    };
+
+    const loadData = async (e) => {
+        if (e) e.preventDefault();
+
+        const currentHash = JSON.stringify(filters);
+        if (productionData && productionFiltersHash === currentHash) {
+            setData(productionData);
+            setLoading(false);
+            return;
+        }
+
+        setLoading(true);
+        try {
+            // Mapping UI filters to API
+            const apiFilters = {
+                exercise: filters.exercise ? parseInt(filters.exercise) : null,
+                work_num: filters.work_num ? parseInt(filters.work_num) : null,
+                series: filters.series || null,
+                fabrication_num: filters.fabrication_num ? parseInt(filters.fabrication_num) : null,
+                article: filters.article || null,
+                status: filters.status !== '' ? parseInt(filters.status) : null,
+                operator: filters.operator || null,
+                observations: filters.observations || null
+            };
+
+            const result = await fetchProductionOrders(apiFilters);
+            if (Array.isArray(result)) {
+                setData(result);
+                setProductionData(result, currentHash);
+            } else if (result && result.error) {
+                setError(`Error del Servidor: ${result.error}`);
+                setData([]);
+            } else {
+                setData([]);
+            }
+        } catch (err) {
+            setError("Error cargando órdenes de fabricación. Verifica el backend.");
+            setData([]);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleFilterChange = (e) => {
+        const { name, value } = e.target;
+        setFilters(prev => ({ ...prev, [name]: value }));
+    };
+
+    return (
+        <div className="w-full min-h-screen bg-[#f8fafc] dark:bg-slate-950 p-4 text-gray-800 dark:text-slate-200 font-sans transition-colors">
+            <PageHeader moduleName="Producción" showRefresh={false}>
+                <Link to="/produccion/rma" className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded shadow-sm transition font-bold text-xs h-[34px] flex items-center justify-center whitespace-nowrap gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    RMA
+                </Link>
+            </PageHeader>
+
+            {/* Advanced Filters Bar - ERP Style */}
+            <form onSubmit={loadData} className="bg-white dark:bg-slate-900 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 mb-4 transition-colors">
+                <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4 items-end">
+                    <div>
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Ejercicio</label>
+                        <input name="exercise" type="number" value={filters.exercise || ''} onChange={handleFilterChange} placeholder="2026" className="w-full rounded-lg border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2 transition-colors" />
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Serie</label>
+                        <input name="series" type="text" value={filters.series || ''} onChange={handleFilterChange} placeholder="INF, CON, SIS" className="w-full rounded-lg border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2 transition-colors" />
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Nº Trabajo</label>
+                        <input name="work_num" type="number" value={filters.work_num || ''} onChange={handleFilterChange} placeholder="Trabajo" className="w-full rounded-lg border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2 transition-colors" />
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Nº Fabricación</label>
+                        <input name="fabrication_num" type="number" value={filters.fabrication_num || ''} onChange={handleFilterChange} placeholder="Fabricación" className="w-full rounded-lg border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2 transition-colors" />
+                    </div>
+
+                    <div>
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Artículo</label>
+                        <input name="article" type="text" value={filters.article || ''} onChange={handleFilterChange} placeholder="Código o nomb..." className="w-full rounded-lg border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2 transition-colors" />
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Estado OF</label>
+                        <select name="status" value={filters.status} onChange={handleFilterChange} className="w-full rounded-lg border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2 transition-colors">
+                            <option value="">Todos</option>
+                            <option value="0">Preparada</option>
+                            <option value="1">Abierta</option>
+                            <option value="2">Finalizada</option>
+                            <option value="3">Retenida</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Observaciones</label>
+                        <input name="observations" type="text" value={filters.observations || ''} onChange={handleFilterChange} placeholder="Palabra clave..." title="Busca coincidencias en las observaciones de la O.F." className="w-full rounded-lg border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2 transition-colors" />
+                    </div>
+                    <div>
+                        <button type="submit" className="w-full bg-[#d88900] text-white px-4 py-2 rounded-lg hover:bg-[#b57300] transition font-bold text-sm h-[38px] flex items-center justify-center gap-2">
+                            Filtrar
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            {/* Density Data Table */}
+            <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden transition-colors">
+                {loading ? (
+                    <div className="p-20 text-center">
+                        <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-slate-200 dark:border-slate-700 border-t-[#d88900] mb-4"></div>
+                        <div className="text-slate-500 dark:text-slate-400 font-medium">Recuperando información de planta...</div>
+                    </div>
+                ) : error ? (
+                    <div className="p-20 text-center text-red-500 font-medium">{error}</div>
+                ) : data.length === 0 ? (
+                    <div className="p-20 text-center text-slate-400 dark:text-slate-500 font-medium">No hay órdenes de fabricación para estos filtros.</div>
+                ) : (
+                    <div className="overflow-x-auto max-h-[70vh] custom-scrollbar">
+                        <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 relative">
+                            <thead className="bg-[#444b41] dark:bg-slate-800 text-white sticky top-0 z-10 shadow-sm transition-colors">
+                                <tr className="divide-x divide-slate-600 dark:divide-slate-700">
+                                    <th className="px-2 py-2 w-8"></th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Ejercicio</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Serie</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Nº Trabajo</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-center">Fecha Creada</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-center">Fecha Prev.</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Orden Fabricación (O.F.)</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider min-w-[200px]">Observaciones</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Artículo</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider">Descripción</th>
+                                    <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wider">U. a Fabricar</th>
+                                    <th className="px-3 py-2 text-right text-[11px] font-bold uppercase tracking-wider">U. Fabricadas</th>
+                                    <th className="px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wider text-center">Nº Fab</th>
+                                    <th className="px-3 py-2 text-center text-[11px] font-bold uppercase tracking-wider">Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white dark:bg-slate-900 divide-y divide-slate-100 dark:divide-slate-800/50 transition-colors">
+                                {data.map((order, idx) => {
+                                    const progress = (order.UnidadesFabricadas / (order.UnidadesFabricar || 1)) * 100;
+                                    const progressClamped = Math.min(Math.max(progress, 0), 100);
+
+                                    const isExpanded = expandedRows[order.NumeroTrabajo];
+
+                                    return (
+                                        <Fragment key={idx}>
+                                            <tr
+                                                onClick={() => toggleRow(order.NumeroTrabajo)}
+                                                className={`divide-x divide-slate-100 dark:divide-slate-800/50 transition-colors text-[12px] cursor-pointer ${isExpanded ? 'bg-indigo-50/30 dark:bg-indigo-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'}`}
+                                            >
+                                                <td className="px-2 py-2 text-center text-slate-400 dark:text-slate-500">
+                                                    <svg className={`w-4 h-4 transform transition-transform ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg>
+                                                </td>
+                                                <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-400">{order.Ejercicio}</td>
+                                                <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-400 font-mono">{order.SerieDocumento}</td>
+                                                <td className="px-3 py-2 whitespace-nowrap font-bold text-slate-900 dark:text-slate-100 font-mono">{order.NumeroTrabajo}</td>
+                                                <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-400 text-center">
+                                                    {order.FechaCreacion ? new Date(order.FechaCreacion).toLocaleDateString() : '-'}
+                                                </td>
+                                                <td className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-400 text-center">
+                                                    {order.FechaFinalPrevista ? new Date(order.FechaFinalPrevista).toLocaleDateString() : '-'}
+                                                </td>
+                                                <td className="px-3 py-2 whitespace-nowrap font-black text-indigo-700 dark:text-indigo-400 font-mono bg-indigo-50/20 dark:bg-indigo-900/20">
+                                                    {order.SerieDocumento}/{order.NumeroFabricacion}
+                                                </td>
+                                                <TruncatedCell text={order.Observaciones} maxWidth="200px" />
+
+                                                <td className="px-3 py-2 whitespace-nowrap font-bold text-slate-800 dark:text-slate-200">{order.CodigoArticulo}</td>
+                                                <td className="px-3 py-2 text-slate-600 dark:text-slate-300 max-w-[250px] truncate" title={order.DescripcionArticulo}>
+                                                    {order.DescripcionArticulo}
+                                                </td>
+                                                <td className="px-3 py-2 whitespace-nowrap text-right text-slate-600 dark:text-slate-400 font-medium">
+                                                    {parseFloat(order.UnidadesFabricar || 0).toLocaleString('es-ES')}
+                                                </td>
+                                                <td className="px-3 py-2 whitespace-nowrap text-right">
+                                                    <div className="flex flex-col items-end gap-1">
+                                                        <span className="font-bold text-slate-800 dark:text-slate-200">{parseFloat(order.UnidadesFabricadas || 0).toLocaleString('es-ES')}</span>
+                                                        <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1.5 ml-2 mt-1">
+                                                            <div
+                                                                className={`h-1.5 rounded-full ${progressClamped >= 100 ? 'bg-green-500' : 'bg-blue-500'} ${order.EstadoOF === 3 ? '!bg-red-500' : ''}`}
+                                                                style={{ width: `${progressClamped}%` }}
+                                                            ></div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-3 py-2 whitespace-nowrap text-center font-bold text-slate-700 dark:text-slate-300 border-x border-slate-100 dark:border-slate-800">{order.NumeroFabricacion}</td>
+                                                <td className="px-3 py-2 whitespace-nowrap text-center">
+                                                    <StatusBadge statusId={order.EstadoOF} statusDesc={order.EstadoDesc} />
+                                                </td>
+                                            </tr>
+                                            {isExpanded && (
+                                                <tr className="bg-slate-50/50 dark:bg-slate-800/20">
+                                                    <td colSpan="13" className="p-0 border-b border-indigo-100 dark:border-slate-800 border-x border-indigo-100 dark:border-slate-800 shadow-inner">
+                                                        <OperationsTable
+                                                            exercise={order.Ejercicio}
+                                                            workNum={order.NumeroTrabajo}
+                                                            fabNum={order.NumeroFabricacion}
+                                                            series={order.SerieDocumento}
+                                                        />
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </Fragment>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+            <div className="mt-4 text-[11px] text-slate-400 dark:text-slate-500 flex justify-between px-2">
+                <span>Total registros cargados: {data.length}</span>
+                <span>Base de Datos Sage200 (Solo lectura)</span>
+            </div>
+        </div>
+    );
+}

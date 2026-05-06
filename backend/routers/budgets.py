@@ -1,0 +1,367 @@
+from fastapi import APIRouter, HTTPException, Depends
+import pandas as pd
+import os
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from database import get_db
+from datetime import date, datetime
+from typing import Optional
+from pydantic import BaseModel
+import auth, models
+import shutil
+import tempfile
+import time
+
+router = APIRouter(
+    prefix="/budgets",
+    tags=["budgets"]
+)
+
+# Handle path dynamically for Windows/Linux
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+BUDGET_EXCEL_PATH = os.path.join(PROJECT_ROOT, "Presupuestos por cliente.xlsx")
+
+def parse_excel_file():
+    print(f"DEBUG: Intentando leer Excel en: {BUDGET_EXCEL_PATH}")
+    if not os.path.exists(BUDGET_EXCEL_PATH):
+        print(f"DEBUG: El archivo NO existe en la ruta especificada.")
+        return {}
+            
+    temp_path = None
+    max_retries = 3
+    retry_delay = 0.5
+    
+    df = None
+    for attempt in range(max_retries):
+        try:
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, f"temp_budgets_{os.getpid()}_{attempt}.xlsx")
+            shutil.copy2(BUDGET_EXCEL_PATH, temp_path)
+            
+            df = pd.read_excel(temp_path, sheet_name=0, header=None)
+            if df is not None:
+                print(f"DEBUG: Excel leído correctamente. Filas: {len(df)}")
+                break
+        except Exception as e:
+            print(f"DEBUG: Intento {attempt+1} fallido: {e}")
+            if attempt == max_retries - 1:
+                return {}
+            time.sleep(retry_delay)
+            if temp_path and os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except: pass
+    
+    if df is None:
+        return {}
+
+    try:
+        main_headers = list(df.iloc[0].values)
+        sub_headers = list(df.iloc[1].values)
+        df_data = df.iloc[2:].copy()
+        
+        current_main = None
+        for i in range(2, len(main_headers)):
+            val = str(main_headers[i]).strip().lower()
+            if val != 'nan' and len(val) > 0:
+                current_main = val
+            main_headers[i] = current_main
+            
+        parsed_data = {}
+        for index, row in df_data.iterrows():
+            client_code = row[0]
+            client_name = row[1]
+            if pd.isna(client_code) or pd.isna(client_name):
+                continue
+            
+            # Robust client code normalization (no decimals)
+            try:
+                if isinstance(client_code, (float, int)):
+                    code_str = str(int(float(client_code)))
+                else:
+                    code_str = str(client_code).strip()
+                    if '.' in code_str:
+                        code_str = code_str.split('.')[0]
+            except:
+                code_str = str(client_code).strip().split('.')[0]
+                
+            if code_str not in parsed_data:
+                parsed_data[code_str] = {"client_code": code_str, "client_name": str(client_name), "divisions": {}}
+            
+            client_budget = parsed_data[code_str]
+            
+            for i in range(2, len(main_headers)):
+                division = str(main_headers[i])
+                sub_header = str(sub_headers[i]).strip().lower()
+                if division == 'none' or division == 'nan':
+                    continue
+                
+                is_total_column = (i == 2 or main_headers[i] != main_headers[i-1] or sub_header == 'total')
+                final_sub_header = "total" if is_total_column else sub_header
+                
+                val = row[i]
+                num_val = 0.0
+                if not pd.isna(val) and str(val).strip() != '':
+                    try: num_val = float(val)
+                    except: pass
+                
+                # AGGREGATE instead of OVERWRITE
+                if division not in client_budget["divisions"]:
+                    client_budget["divisions"][division] = {}
+                
+                current_prev = client_budget["divisions"][division].get(final_sub_header, 0.0)
+                client_budget["divisions"][division][final_sub_header] = current_prev + num_val
+                
+        print(f"DEBUG: Proceso finalizado. Clientes parseados: {len(parsed_data)}")
+        return parsed_data
+    except Exception as e:
+        print(f"ERROR procesando datos del Excel: {e}")
+        return {}
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try: os.remove(temp_path)
+            except: pass
+
+@router.get("/status")
+async def get_budget_status():
+    if os.path.exists(BUDGET_EXCEL_PATH):
+        return {"has_data": True, "file_exists": True}
+    return {"has_data": False, "file_exists": False}
+
+class BudgetFilters(BaseModel):
+    year: Optional[int] = None
+    company_id: Optional[str] = '2'
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+@router.post("/client-budgets")
+def get_client_budgets(filters: BudgetFilters, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_active_user)):
+    try:
+        print(f"DEBUG: [Budgets] Iniciando carga desde SQL para año {filters.year or 'actual'}")
+        
+        # Determine the date range
+        try:
+            if filters.start_date:
+                period_start = datetime.strptime(filters.start_date, "%Y-%m-%d").date()
+            else:
+                period_start = date(filters.year or date.today().year, 1, 1)
+                
+            if filters.end_date:
+                period_end = datetime.strptime(filters.end_date, "%Y-%m-%d").date()
+            else:
+                period_end = date(filters.year or date.today().year, 12, 31)
+                
+            year = period_start.year
+        except:
+            period_start = date(filters.year or date.today().year, 1, 1)
+            period_end = date(filters.year or date.today().year, 12, 31)
+            year = period_start.year
+
+        # Load Budgets from SQL instead of Excel
+        b_query = "SELECT * FROM Presupuestos_AEL WHERE Año = :year"
+        df_budgets_raw = pd.read_sql(text(b_query), db.bind, params={"year": year})
+        
+        if df_budgets_raw.empty:
+            return {"error": "No se encontraron presupuestos en la base de datos.", "data": []}
+
+        # Restructure SQL data to match old budgets_data nested format
+        # { client_code -> { client_name: X, divisions: { div -> { total: Y, ene: Z, ... } } } }
+        # Note: We don't have client_name in the new table yet, but we can get it from Sage if needed.
+        # However, for now, let's just use the code as name if missing, or we can quickly join.
+        
+        budgets_data = {}
+        # We need client names for the UI. Let's fetch them from Sage Clientes table.
+        with db.bind.connect() as conn:
+            df_names = pd.read_sql(text("SELECT CodigoCliente, RazonSocial FROM Clientes WHERE CodigoEmpresa = '2'"), conn)
+            name_map = dict(zip(df_names['CodigoCliente'].astype(str), df_names['RazonSocial']))
+
+        for _, row in df_budgets_raw.iterrows():
+            c_code = str(row['CodigoCliente'])
+            div = str(row['Division'])
+            c_name = name_map.get(c_code, f"Cliente {c_code}")
+            
+            if c_code not in budgets_data:
+                budgets_data[c_code] = {"client_name": c_name, "divisions": {}}
+            
+            if div not in budgets_data[c_code]["divisions"]:
+                budgets_data[c_code]["divisions"][div] = {"total": 0, "comercial_estatico": row['Comercial']}
+            
+            # Map month index to excel key (ene, feb...)
+            months_excel_map = {1:'ene', 2:'feb', 3:'mar', 4:'abr', 5:'may', 6:'jun', 7:'jul', 8:'ago', 9:'sep', 10:'oct', 11:'nov', 12:'dic'}
+            m_key = months_excel_map[int(row['Mes'])]
+            val = float(row['Presupuesto'] or 0)
+            
+            budgets_data[c_code]["divisions"][div][m_key] = val
+            budgets_data[c_code]["divisions"][div]["total"] += val
+
+        # Fetch sales for the entire year to show all months in the breakdown,
+        # but identify those within the requested period for progress calculation.
+        query = """
+            SELECT 
+                CAST(CodigoCliente AS VARCHAR) as CodigoCliente, 
+                UPPER(RTRIM(LTRIM(Comisionista))) as Comisionista, 
+                FechaFactura,
+                SUM(CAST(ISNULL(BaseImponible, 0) AS FLOAT)) as ActualSales 
+            FROM Vis_AEL_DiarioFactxComercial 
+            WHERE CodigoEmpresa = :empresa 
+              AND EjercicioFactura = :year
+            GROUP BY CodigoCliente, Comisionista, FechaFactura
+        """
+        
+        try:
+            df_actual = pd.read_sql(
+                text(query), 
+                db.bind, 
+                params={
+                    "empresa": filters.company_id, 
+                    "year": year
+                }
+            )
+        except Exception as sql_e:
+            print(f"ERROR: [Budgets] Fallo en la consulta SQL: {sql_e}")
+            return {"error": "Error al consultar las ventas en la base de datos.", "data": []}
+
+        divisions_map = {
+            'Conectrónica': ['JOSE CESPEDES BLANCO', 'ANTONIO MACHO MACHO', 'JESUS COLLADO ARAQUE', 'ADRIÁN ROMERO JIMENEZ'],
+            'Sismecánica': ['JUAN CARLOS BENITO RAMOS', 'JAVIER ALLEN PERKINS'],
+            'Informática Industrial': ['JUAN CARLOS VALDES ANTON']
+        }
+        rep_to_div = {rep.upper(): div for div, reps in divisions_map.items() for rep in reps}
+        month_names_map = {
+            1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio',
+            7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+        }
+        
+        # Structure: client_id -> { total_year: X, total_period: Y, divisions: { div -> { total_year: Y, total_period: Z, rep_name: '...', months: { 'Enero' -> Z } } } }
+        actual_data = {}
+        for _, row in df_actual.iterrows():
+            try:
+                raw_code = str(row['CodigoCliente']).strip()
+                if not raw_code or raw_code == 'None': continue
+                
+                client_id = raw_code.split('.')[0] if '.' in raw_code else raw_code
+                
+                rep_raw = str(row['Comisionista']).strip()
+                div = rep_to_div.get(rep_raw, 'otros')
+                
+                f_date = row['FechaFactura']
+                if isinstance(f_date, datetime):
+                    f_date = f_date.date()
+                
+                is_in_period = (period_start <= f_date <= period_end)
+                month_idx = f_date.month
+                month_name = month_names_map.get(month_idx)
+                amount = float(row['ActualSales'] or 0)
+                
+                if client_id not in actual_data:
+                    actual_data[client_id] = {"total_year": 0, "total_period": 0, "divisions": {}}
+                
+                if div not in actual_data[client_id]["divisions"]:
+                    actual_data[client_id]["divisions"][div] = {"total_year": 0, "total_period": 0, "rep_name": rep_raw, "months": {}}
+                
+                actual_data[client_id]["total_year"] += amount
+                actual_data[client_id]["divisions"][div]["total_year"] += amount
+                
+                if is_in_period:
+                    actual_data[client_id]["total_period"] += amount
+                    actual_data[client_id]["divisions"][div]["total_period"] += amount
+                
+                if month_name:
+                    actual_data[client_id]["divisions"][div]["months"][month_name] = actual_data[client_id]["divisions"][div]["months"].get(month_name, 0) + amount
+            except: continue
+
+        results = []
+        for client_code, budget_info in budgets_data.items():
+            try:
+                client_actuals = actual_data.get(client_code, {"total_year": 0, "total_period": 0, "divisions": {}})
+                merged_divisions = []
+                total_budget = 0
+                total_period_budget = 0
+                total_actual = client_actuals["total_period"]
+                
+                for div_name, div_budget_data in budget_info.get("divisions", {}).items():
+                    if div_name == "total": continue
+                    
+                    div_total_budget = float(div_budget_data.get("total", 0))
+                    
+                    div_actual_info = client_actuals["divisions"].get(div_name, {"total_year": 0, "total_period": 0, "rep_name": None, "months": {}})
+                    div_actual_total = div_actual_info["total_period"]
+                    
+                    # Compute prorated budget for this division
+                    div_period_budget = 0.0
+                    import calendar
+                    
+                    monthly_details = []
+                    for m_idx in range(1, 13):
+                        m_name = month_names_map[m_idx]
+                        excel_key = {
+                            'Enero': 'ene', 'Febrero': 'feb', 'Marzo': 'mar', 'Abril': 'abr', 
+                            'Mayo': 'may', 'Junio': 'jun', 'Julio': 'jul', 'Agosto': 'ago', 
+                            'Septiembre': 'sep', 'Octubre': 'oct', 'Noviembre': 'nov', 'Diciembre': 'dic'
+                        }[m_name]
+                        
+                        m_budget = float(div_budget_data.get(excel_key, 0))
+                        
+                        # Proration calculation
+                        m_first = date(year, m_idx, 1)
+                        m_last_day = calendar.monthrange(year, m_idx)[1]
+                        m_last = date(year, m_idx, m_last_day)
+                        
+                        # Intersection of month [m_first, m_last] and period [period_start, period_end]
+                        inter_start = max(m_first, period_start)
+                        inter_end = min(m_last, period_end)
+                        
+                        overlap_days = (inter_end - inter_start).days + 1
+                        if inter_start > inter_end:
+                            overlap_days = 0
+                            
+                        ratio = overlap_days / m_last_day
+                        div_period_budget += m_budget * ratio
+                        
+                        m_actual = float(div_actual_info["months"].get(m_name, 0))
+                        monthly_details.append({
+                            "month": m_name,
+                            "budget": m_budget,
+                            "actual": m_actual
+                        })
+                    
+                    # HIDE divisions with NO budget AND NO sales in the period
+                    if div_total_budget == 0 and div_actual_total == 0:
+                        continue
+                        
+                    total_budget += div_total_budget
+                    total_period_budget += div_period_budget
+                    
+                    merged_divisions.append({
+                        "name": div_name.upper(),
+                        "comercial": div_actual_info.get("rep_name") or div_budget_data.get("comercial_estatico") or "NO ASIGNADO",
+                        "budget": div_total_budget,
+                        "period_budget": div_period_budget,
+                        "actual": div_actual_total,
+                        "progress": (div_actual_total / div_period_budget * 100) if div_period_budget > 0 else 100 if div_actual_total > 0 else 0,
+                        "annual_progress": (div_actual_total / div_total_budget * 100) if div_total_budget > 0 else 0,
+                        "monthly": monthly_details
+                    })
+                    
+                if not merged_divisions and total_actual == 0:
+                    continue 
+                    
+                results.append({
+                    "client_code": client_code,
+                    "client_name": budget_info["client_name"],
+                    "total_budget": total_budget,
+                    "total_period_budget": total_period_budget,
+                    "total_actual": total_actual,
+                    "total_progress": (total_actual / total_period_budget * 100) if total_period_budget > 0 else 100 if total_actual > 0 else 0,
+                    "divisions": merged_divisions
+                })
+            except: continue
+            
+        results.sort(key=lambda x: x["total_budget"], reverse=True)
+        print(f"DEBUG: [Budgets] Finalizado con éxito. {len(results)} clientes procesados.")
+        return {"data": results}
+    except Exception as global_e:
+        import traceback
+        print("CRITICAL ERROR: [Budgets] Fallo absoluto en el endpoint:")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Error interno al procesar los presupuestos.")

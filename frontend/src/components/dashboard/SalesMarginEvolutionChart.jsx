@@ -1,0 +1,86 @@
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+const COLORS = {
+    'Conectrónica': '#10b981', // Emerald
+    'Sismecánica': '#3b82f6', // Blue
+    'Informática Industrial': '#8b5cf6', // Purple
+    'Otros': '#94a3b8' // Slate
+};
+
+export function SalesMarginEvolutionChart({ data, isEmbed }) {
+    // Get unique divisions from data to render lines
+    const divisions = data.length > 0
+        ? Object.keys(data[0]).filter(key => key !== 'Periodo')
+        : [];
+
+    const containerClass = isEmbed
+        ? "w-full h-full flex flex-col pt-0"
+        : "bg-white dark:bg-slate-900 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-slate-800 h-full flex flex-col transition-colors";
+
+    return (
+        <div className={containerClass}>
+            <h3 className="text-slate-700 dark:text-slate-300 font-bold text-xs uppercase tracking-tight mb-2 text-center">Evolución Margen (%)</h3>
+            <div style={{ width: '100%', height: '100%', minHeight: 0, flexGrow: 1 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="currentColor" className="text-slate-200 dark:text-slate-700" />
+                        <XAxis
+                            dataKey="Periodo"
+                            tick={{ fontSize: 10, fill: 'currentColor' }}
+                            className="text-slate-500 dark:text-slate-400"
+                            tickFormatter={(val) => {
+                                // Dynamic parsing for YYYY-MM or YYYY-MM-DD
+                                const isDaily = val.length > 7;
+                                if (isDaily) {
+                                    const d = new Date(val);
+                                    return d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
+                                }
+                                const date = new Date(val + '-01');
+                                return date.toLocaleDateString('es-ES', { month: 'short', year: '2-digit' });
+                            }}
+                        />
+                        <YAxis
+                            tickFormatter={(val) => `${val}%`}
+                            domain={[0, 'auto']}
+                            tick={{ fontSize: 12, fill: 'currentColor' }}
+                            className="text-slate-500 dark:text-slate-400"
+                        />
+                        <Tooltip
+                            formatter={(val, name) => [`${val.toFixed(1)}%`, name]}
+                            labelFormatter={(label) => {
+                                const isDaily = label.length > 7;
+                                if (isDaily) {
+                                    return new Date(label).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+                                }
+                                const date = new Date(label + '-01');
+                                return date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+                            }}
+                            contentStyle={{ backgroundColor: '#ffffff', borderColor: '#e2e8f0', borderRadius: '0.5rem', color: '#1e293b', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' }}
+                            itemStyle={{ fontWeight: 'bold' }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: '12px', color: 'currentColor' }} className="text-slate-600 dark:text-slate-300" />
+                        {divisions.map((div) => (
+                            <Line
+                                key={div}
+                                type="monotone"
+                                dataKey={div}
+                                stroke={COLORS[div] || COLORS.Otros}
+                                strokeWidth={3}
+                                dot={data.length > 31 ? false : { r: 3 }}
+                                activeDot={{ r: 6 }}
+                                connectNulls={true}
+                                name={div}
+                                label={data.length > 32 ? false : {
+                                    position: 'top',
+                                    fontSize: 10,
+                                    fill: COLORS[div] || '#666',
+                                    formatter: (val) => val != null ? `${val.toFixed(0)}%` : ''
+                                }}
+                            />
+                        ))}
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
+        </div>
+    );
+}
